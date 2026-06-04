@@ -77,11 +77,20 @@ function readPacket(packet, worldRef, gameRef) {
     }
 
   } else if (type === "map") {
-    console.log("Loaded map:", data);
-    gameRef.currentMap = data;
-    loadMapIntoWorld(worldRef, data);
+  console.log("Loaded map:", data);
+  gameRef.currentMap = data;
+  loadMapIntoWorld(worldRef, data);
 
-  } else if (type === "time") {
+  // --- Resize canvas to map size ---
+  if (gameRef.canvas && data.tiles) {
+    const width  = data.tiles.length * 40;          // TILE_SIZE
+    const height = data.tiles[0].length * 40;       // TILE_SIZE
+    gameRef.canvas.width  = width;
+    gameRef.canvas.height = height;
+    console.log(`Canvas resized to ${width}x${height}`);
+  }
+}
+ else if (type === "time") {
     gameRef.state = data.state;
     gameRef.time = data.time;
 
