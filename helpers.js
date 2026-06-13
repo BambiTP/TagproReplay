@@ -26,25 +26,29 @@ const b2PolygonShape = Box2D.Collision.Shapes.b2PolygonShape;
  * Signature: addPlayer(id, startX, startY, world, game)
  * - startX/startY are pixel coordinates (top-left spawn)
  */
-function addPlayer(id, startX, startY, world, game) {
-  if (!world || !game) throw new Error("addPlayer requires (id, startX, startY, world, game)");
+// In helpers.js
+function addPlayer(id, rx, ry, world, game) {
+  if (!world || !game) throw new Error("addPlayer requires (id, rx, ry, world, game)");
 
   const player = {
     id: id,
     left: false, right: false, up: false, down: false,
-    ms: 2.5,    // Max Speed (meters/sec)
-    ac: 0.025,  // Acceleration (meters/frame-ish)
+    ms: 2.5,
+    ac: 0.025,
 
-    // Convert top-left pixel spawn to centered meters (+0.19m radius)
-    rx: (startX / 100) + 0.19,
-    ry: (startY / 100) + 0.19,
+    // rx/ry are the true center in meters
+    rx: rx,
+    ry: ry,
     lx: 0,
     ly: 0,
     a: 0,
 
-    // Convert top-left pixel spawn to centered pixels (+19px radius)
-    x: startX + 19,
-    y: startY + 19
+    // Pixel position for rendering is purely meters * 100
+    x: rx * 100,
+    y: ry * 100,
+
+    sync: null,
+    directSet: false
   };
 
   game.players[id] = player;
@@ -183,9 +187,8 @@ function createPlayerBody(e, world, game) {
 
   const r = new b2FixtureDef();
   r.density = 1;
-  r.shape = new b2CircleShape(0.19); // 0.19m radius
+  r.shape = new b2CircleShape(0.19);
 
-  // Apply Gravity Event physics if active
   if (game.isGravityEvent) {
     r.friction = 0.0;
     r.restitution = 0.3;
@@ -207,7 +210,6 @@ function createPlayerBody(e, world, game) {
 
   return o;
 }
-
 // 2. Pass `game` into map loader
 function loadMapIntoWorld(world, map, game) {
   if (!world || !map || !map.tiles) return;
