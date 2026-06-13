@@ -39,8 +39,8 @@ game.createPlayerBody = function (e) {
   return createPlayerBody(e, this.world, this);
 };
 
-game.addPlayer = function (id, startX, startY) {
-  return addPlayer(id, startX, startY, this.world, this);
+game.addPlayer = function (id, rx, ry) {
+  return addPlayer(id, rx, ry, this.world, this);
 };
 
 game.loadMapIntoWorld = function (map) {
@@ -67,35 +67,50 @@ game.handlePacket = function (packet) {
    Main loop
    ------------------------- */
 game.loop = function () {
-  // Update players from physics bodies
   for (let id in this.players) {
     const player = this.players[id];
     const body = this.bodies[id];
     if (!body) continue;
 
-    const velocity = body.GetLinearVelocity();
+    // Apply position smoothing
+    if (player.sync && player.sync.frame > 0) {
+      const pos = body.GetPosition();
+      const s = player.sync.step;
+      const t = player.sync.to;
 
+      if ((s.x > 0 && pos.x < t.x) || (s.x < 0 && pos.x > t.x))
+        pos.x += s.x;
+      else
+        s.x = 0;
+
+      if ((s.y > 0 && pos.y < t.y) || (s.y < 0 && pos.y > t.y))
+        pos.y += s.y;
+      else
+        s.y = 0;
+
+      body.SetPosition(pos);
+      player.sync.frame--;
+      if (player.sync.frame <= 0) player.sync = null;
+    }
+
+    // Apply key forces
+    const velocity = body.GetLinearVelocity();
     if (player.left && velocity.x > -player.ms) velocity.x -= player.ac;
     if (player.right && velocity.x < player.ms) velocity.x += player.ac;
     if (player.up && velocity.y > -player.ms) velocity.y -= player.ac;
     if (player.down && velocity.y < player.ms) velocity.y += player.ac;
-
     body.SetLinearVelocity(velocity);
 
+    // Copy physics to player for rendering
     const pos = body.GetPosition();
     player.x = pos.x * 100;
     player.y = pos.y * 100;
     player.a = body.GetAngle();
   }
 
-  // Step physics
   this.world.Step(1 / 60, 10, 10);
   this.world.ClearForces();
-
-  // Render
   this.renderGame();
-
-  // Schedule next frame
   this._rafId = requestAnimationFrame(this.loop.bind(this));
 };
 
@@ -129,9 +144,7 @@ game.setMap = function (map) {
    ------------------------- */
 game.spawnOrUpdateFromPacketData = function (pData) {
   if (!this.players[pData.id]) {
-    const startX = (pData.rx || 0) * 100;
-    const startY = (pData.ry || 0) * 100;
-    this.addPlayer(pData.id, startX, startY);
+    this.addPlayer(pData.id, pData.rx || 0, pData.ry || 0);
     console.log(`Spawned player ${pData.id} via spawnOrUpdateFromPacketData.`);
   }
 };
