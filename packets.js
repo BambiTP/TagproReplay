@@ -3,23 +3,28 @@
 // Signature: readPacket(packet, worldRef, gameRef)
 
 function readPacket(packet, worldRef, gameRef) {
-  // Basic validation
   if (!Array.isArray(packet) || packet.length < 3) return;
 
   const type = packet[1];
   const data = packet[2];
 
   if (type === "p") {
-    // "p" packets: Player updates
     if (!Array.isArray(data)) return;
 
     data.forEach(pData => {
       // 1. Spawning
       if (!gameRef.players[pData.id]) {
-        const startX = (pData.rx || 0) * 100;
-        const startY = (pData.ry || 0) * 100;
+        // Apply the 0.20m (half tile) offset immediately upon spawning
+        const startX = pData.rx !== undefined ? pData.rx + 0.20 : 0;
+        const startY = pData.ry !== undefined ? pData.ry + 0.20 : 0;
+
         addPlayer(pData.id, startX, startY, worldRef, gameRef);
-        console.log(`Spawned player ${pData.id}.`);
+        console.log(`Spawned player ${pData.id} at (${startX}, ${startY})m.`);
+
+        // Flag if the player spawned with dummy (0,0) coordinates
+        if (pData.rx === undefined && pData.ry === undefined) {
+          gameRef.players[pData.id].needsFirstTeleport = true;
+        }
       }
 
       const player = gameRef.players[pData.id];
@@ -39,13 +44,18 @@ function readPacket(packet, worldRef, gameRef) {
         keys.forEach(key => player[key] = false);
       }
 
-      // 3. Position/Velocity
+      // 3. Position/Velocity/Angle
       let updatePos = false;
       let updateVel = false;
+      let updateAngle = false;
+      let directSet = false;
 
+      const HALF_TILE_M = 0.20;
+
+      // Continuous position updates (always offset to center)
       if (pData.rx !== undefined || pData.ry !== undefined) {
-        player.rx = pData.rx !== undefined ? pData.rx + 0.19 : player.rx;
-        player.ry = pData.ry !== undefined ? pData.ry + 0.19 : player.ry;
+        player.rx = pData.rx !== undefined ? pData.rx + HALF_TILE_M : player.rx;
+        player.ry = pData.ry !== undefined ? pData.ry + HALF_TILE_M : player.ry;
         updatePos = true;
       }
 
@@ -55,15 +65,68 @@ function readPacket(packet, worldRef, gameRef) {
         updateVel = true;
       }
 
-      const b2Vec2 = Box2D.Common.Math.b2Vec2;
-      if (updatePos && body) {
-        body.SetPosition(new b2Vec2(player.rx, player.ry));
-        wakeUp = true;
+      if (pData.a !== undefined) {
+        player.a = pData.a;
+        if (body) {
+          body.SetAngularVelocity(pData.a);
+          wakeUp = true;
+        }
       }
+
+      if (pData.ra !== undefined) {
+        player.ra = pData.ra;
+        updateAngle = true;
+      }
+
+      // Check for directSet flag
+      if (pData.directSet !== undefined) {
+        player.directSet = pData.directSet;
+        if (pData.directSet === true) directSet = true;
+      }
+
+      // Velocity: always set directly, but strictly gate it behind the active game state
       if (updateVel && body) {
-        body.SetLinearVelocity(new b2Vec2(player.lx, player.ly));
+        if (gameRef.state !== 1) {
+          // Lock the player in place during countdowns or ended states
+          body.SetLinearVelocity(new b2Vec2(0, 0));
+          player.lx = 0;
+          player.ly = 0;
+        } else {
+          // Game is active, apply server velocities
+          body.SetLinearVelocity(new b2Vec2(player.lx, player.ly));
+          wakeUp = true;
+        }
+      }
+
+      // Position: directSet = teleport, otherwise smooth
+      if (updatePos && body) {
+        if (directSet || player.needsFirstTeleport) {
+          body.SetPosition(new b2Vec2(player.rx, player.ry));
+          if (updateAngle) body.SetAngle(player.ra);
+          player.sync = null;
+          wakeUp = true;
+          player.needsFirstTeleport = false; // Clear the flag so they smooth normally moving forward
+        } else {
+          const currentPos = body.GetPosition();
+          const syncFrames = 6;
+
+          player.sync = {
+            to: { x: player.rx, y: player.ry, a: updateAngle ? player.ra : null },
+            frame: syncFrames,
+            step: {
+              x: (player.rx - currentPos.x) / syncFrames,
+              y: (player.ry - currentPos.y) / syncFrames,
+              a: updateAngle ? (player.ra - body.GetAngle()) / syncFrames : 0
+            }
+          };
+          wakeUp = true;
+        }
+      } else if (updateAngle && body && !directSet) {
+        // Angle update without position update
+        body.SetAngle(player.ra);
         wakeUp = true;
       }
+
       if (wakeUp && body) body.SetAwake(true);
     });
 
@@ -77,24 +140,22 @@ function readPacket(packet, worldRef, gameRef) {
     }
 
   } else if (type === "map") {
-  console.log("Loaded map:", data);
-  gameRef.currentMap = data;
-  loadMapIntoWorld(worldRef, data);
+    console.log("Loaded map:", data);
+    gameRef.currentMap = data;
+    loadMapIntoWorld(worldRef, data);
 
-  // --- Resize canvas to map size ---
-  if (gameRef.canvas && data.tiles) {
-    const width  = data.tiles.length * 40;          // TILE_SIZE
-    const height = data.tiles[0].length * 40;       // TILE_SIZE
-    gameRef.canvas.width  = width;
-    gameRef.canvas.height = height;
-    console.log(`Canvas resized to ${width}x${height}`);
-  }
-}
- else if (type === "time") {
+    if (gameRef.canvas && data.tiles) {
+      const width = data.tiles.length * 40;
+      const height = data.tiles[0].length * 40;
+      gameRef.canvas.width = width;
+      gameRef.canvas.height = height;
+      console.log(`Canvas resized to ${width}x${height}`);
+    }
+
+  } else if (type === "time") {
     gameRef.state = data.state;
     gameRef.time = data.time;
 
-    // Gravity logic based on state
     if (gameRef.isGravityEvent) {
       if (gameRef.state === 1) {
         worldRef.SetGravity(new Box2D.Common.Math.b2Vec2(0, 9.8 / 2));
@@ -118,8 +179,5 @@ function readPacket(packet, worldRef, gameRef) {
     }
     delete gameRef.players[id];
     console.log(`Player ${id} left.`);
-
-  } else {
-    // console.warn("Unknown packet type:", type);
   }
 }
